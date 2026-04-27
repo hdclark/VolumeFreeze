@@ -1,0 +1,69 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    name: Build Debug & Release APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      # -----------------------------------------------------------------------
+      # 1. Check out the repository
+      # -----------------------------------------------------------------------
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------------
+      # 2. Set up Java 17 (required by AGP 8.x / Kotlin 2.x)
+      # -----------------------------------------------------------------------
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      # -----------------------------------------------------------------------
+      # 3. Install Gradle 8.9 (compatible with AGP 8.5.x)
+      # -----------------------------------------------------------------------
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.9'
+
+      # -----------------------------------------------------------------------
+      # 4. Point the Android SDK at the pre-installed SDK on the runner
+      # -----------------------------------------------------------------------
+      - name: Create local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      # -----------------------------------------------------------------------
+      # 5. Build using the installed Gradle (no wrapper jar needed in CI)
+      # -----------------------------------------------------------------------
+      - name: Build Debug APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Build Release APK (unsigned)
+        run: gradle :app:assembleRelease --stacktrace
+
+      # -----------------------------------------------------------------------
+      # 6. Upload artefacts
+      # -----------------------------------------------------------------------
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VolumeFreeze-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Upload Release APK (unsigned)
+        uses: actions/upload-artifact@v4
+        with:
+          name: VolumeFreeze-release-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 30

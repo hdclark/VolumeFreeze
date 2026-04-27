@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">VolumeFreeze</string>
+    <string name="app_subtitle">Enforces your volume settings</string>
+
+    <!-- Status labels -->
+    <string name="status_active">● Enforcement Active</string>
+    <string name="status_paused">⏸ Enforcement Paused</string>
+
+    <!-- Action buttons -->
+    <string name="action_pause">Pause Enforcement</string>
+    <string name="action_resume">Resume Enforcement</string>
+    <string name="action_update_reference">Save Current as Reference</string>
+
+    <!-- Battery optimization warning -->
+    <string name="battery_warning_title">⚠ Battery Optimization Enabled</string>
+    <string name="battery_warning_message">Android may stop VolumeFreeze in the background. Tap below to disable battery optimizations for this app so it can run continuously.</string>
+    <string name="battery_warning_button">Disable Battery Optimization</string>
+
+    <!-- Volume table headers -->
+    <string name="section_volumes">Volume Levels</string>
+    <string name="section_volumes_hint">Highlighted rows have deviated from their reference. The service will reset them within seconds.</string>
+    <string name="col_stream">Stream</string>
+    <string name="col_current">Current / Max</string>
+    <string name="col_reference">Reference</string>
+    <string name="label_not_set">—</string>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">Volume Freeze Service</string>
+    <string name="notification_channel_description">Persistent notification for the Volume Freeze background enforcement service</string>
+</resources>
