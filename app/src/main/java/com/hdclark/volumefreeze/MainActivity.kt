@@ -186,6 +186,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Creates a single table cell (TextView) for the volume table.
+     * @param text Cell text content
+     * @param weight Layout weight for proportional column sizing
+     */
+    private fun makeVolumeCell(text: String, weight: Float = 1f): TextView =
+        TextView(this).apply {
+            this.text = text
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
+            layoutParams = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, weight)
+        }
+
+    /**
      * Dynamically populates the volume table with one row per monitored stream,
      * showing the current volume alongside the saved reference value.
      */
@@ -214,17 +227,9 @@ class MainActivity : AppCompatActivity() {
                 setPadding(0, 8, 0, 8)
             }
 
-            fun makeCell(text: String, weight: Float = 1f): TextView = TextView(this).apply {
-                this.text = text
-                textSize = 14f
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_primary))
-                val params = TableRow.LayoutParams(0, TableRow.LayoutParams.WRAP_CONTENT, weight)
-                layoutParams = params
-            }
-
-            row.addView(makeCell(VolumeMonitorService.streamName(stream), 1.5f))
-            row.addView(makeCell("$currentVolume / $maxVolume"))
-            row.addView(makeCell(refVolume?.toString() ?: getString(R.string.label_not_set)))
+            row.addView(makeVolumeCell(VolumeMonitorService.streamName(stream), 1.5f))
+            row.addView(makeVolumeCell("$currentVolume / $maxVolume"))
+            row.addView(makeVolumeCell(refVolume?.toString() ?: getString(R.string.label_not_set)))
 
             // Highlight row if the current volume deviates from reference
             if (refVolume != null && currentVolume != refVolume) {
