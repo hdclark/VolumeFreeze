@@ -71,17 +71,23 @@ class VolumeMonitorService : Service() {
         }
 
         /** Human-readable names for each stream constant. */
-        fun streamName(stream: Int): String = when (stream) {
-            AudioManager.STREAM_MUSIC        -> "Media"
-            AudioManager.STREAM_RING         -> "Ringer"
-            AudioManager.STREAM_NOTIFICATION -> "Notifications"
-            AudioManager.STREAM_VOICE_CALL   -> "Phone Call"
-            AudioManager.STREAM_ALARM        -> "Alarm"
-            AudioManager.STREAM_SYSTEM       -> "System"
-            AudioManager.STREAM_DTMF         -> "DTMF"
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                stream == AudioManager.STREAM_ACCESSIBILITY -> "Accessibility"
-            else                             -> "Stream $stream"
+        fun streamName(stream: Int): String {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                stream == AudioManager.STREAM_ACCESSIBILITY
+            ) {
+                return "Accessibility"
+            }
+
+            return when (stream) {
+                AudioManager.STREAM_MUSIC        -> "Media"
+                AudioManager.STREAM_RING         -> "Ringer"
+                AudioManager.STREAM_NOTIFICATION -> "Notifications"
+                AudioManager.STREAM_VOICE_CALL   -> "Phone Call"
+                AudioManager.STREAM_ALARM        -> "Alarm"
+                AudioManager.STREAM_SYSTEM       -> "System"
+                AudioManager.STREAM_DTMF         -> "DTMF"
+                else                             -> "Stream $stream"
+            }
         }
 
         fun startService(context: Context) {
