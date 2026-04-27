@@ -79,7 +79,8 @@ class VolumeMonitorService : Service() {
             AudioManager.STREAM_ALARM        -> "Alarm"
             AudioManager.STREAM_SYSTEM       -> "System"
             AudioManager.STREAM_DTMF         -> "DTMF"
-            10                               -> "Accessibility"  // STREAM_ACCESSIBILITY = 10
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                stream == AudioManager.STREAM_ACCESSIBILITY -> "Accessibility"
             else                             -> "Stream $stream"
         }
 
@@ -193,17 +194,9 @@ class VolumeMonitorService : Service() {
         )
 
         val toggleIntent = if (isPaused) {
-            PendingIntent.getService(
-                this, 1,
-                Intent(this, VolumeMonitorService::class.java).apply { action = ACTION_RESUME },
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+            createServiceActionPendingIntent(1, ACTION_RESUME)
         } else {
-            PendingIntent.getService(
-                this, 2,
-                Intent(this, VolumeMonitorService::class.java).apply { action = ACTION_PAUSE },
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+            createServiceActionPendingIntent(2, ACTION_PAUSE)
         }
 
         val statusText = if (isPaused) {
@@ -218,6 +211,12 @@ class VolumeMonitorService : Service() {
             getString(R.string.action_pause)
         }
 
+        val toggleIcon = if (isPaused) {
+            R.drawable.ic_action_resume
+        } else {
+            R.drawable.ic_action_pause
+        }
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(statusText)
@@ -225,8 +224,23 @@ class VolumeMonitorService : Service() {
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(0, toggleLabel, toggleIntent)
+            .addAction(toggleIcon, toggleLabel, toggleIntent)
             .build()
+    }
+
+    private fun createServiceActionPendingIntent(
+        requestCode: Int,
+        action: String,
+    ): PendingIntent {
+        val intent = Intent(this, VolumeMonitorService::class.java).apply {
+            this.action = action
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(this, requestCode, intent, flags)
+        } else {
+            PendingIntent.getService(this, requestCode, intent, flags)
+        }
     }
 
     private fun updateNotification() {
