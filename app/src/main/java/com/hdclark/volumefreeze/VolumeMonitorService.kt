@@ -314,7 +314,9 @@ class VolumeMonitorService : Service() {
             }
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(btReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            // BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED is a system broadcast — use
+            // RECEIVER_EXPORTED so the system Bluetooth stack can deliver it.
+            registerReceiver(btReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(btReceiver, filter)
