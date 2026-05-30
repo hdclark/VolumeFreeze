@@ -18,11 +18,16 @@
 
     <!-- Volume table headers -->
     <string name="section_volumes">Volume Levels</string>
-    <string name="section_volumes_hint">Highlighted rows have deviated from their reference. The service will reset them within seconds.</string>
+    <string name="section_volumes_hint">Highlighted rows have deviated from their reference. The service will reset them within seconds. Use the checkboxes to choose which streams are enforced.</string>
     <string name="col_stream">Stream</string>
     <string name="col_current">Current / Max</string>
     <string name="col_reference">Reference</string>
+    <string name="col_enforce">Enforce</string>
     <string name="label_not_set">—</string>
+
+    <!-- Bluetooth device labels -->
+    <string name="label_phone_speaker">Phone Speaker</string>
+    <string name="label_audio_device">Reference profile: %1$s</string>
 
     <!-- Notification -->
     <string name="notification_channel_name">Volume Freeze Service</string>

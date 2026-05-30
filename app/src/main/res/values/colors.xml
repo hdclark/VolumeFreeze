@@ -17,8 +17,8 @@
     <color name="battery_warning_stroke">#FFFFAB40</color>
 
     <!-- Table row mismatch highlight -->
-    <color name="row_mismatch">#FFFDE0DC</color>
+    <color name="row_mismatch">#FFFDD835</color>
 
     <!-- Text colours -->
-    <color name="text_primary">#FF1C1B1F</color>
+    <color name="text_primary">#FFE0E0E0</color>
 </resources>
