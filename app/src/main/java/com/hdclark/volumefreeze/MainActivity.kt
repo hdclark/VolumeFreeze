@@ -68,7 +68,7 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, windowInsets ->
             val bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
             v.setPadding(v.paddingLeft, bars.top, v.paddingRight, bars.bottom)
-            WindowInsetsCompat.CONSUMED
+            windowInsets
         }
 
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
