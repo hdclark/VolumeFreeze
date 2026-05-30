@@ -431,7 +431,21 @@ class VolumeMonitorService : Service() {
      * For each stream that is enabled for enforcement and deviates from its reference
      * value, reset it silently (no UI, no sound).
      */
-    private fun enforceVolumes() {
+private fun enforceVolumes() {
+        val newKey = getCurrentBtDeviceKey()
+        if (newKey != currentDeviceKey) {
+            currentDeviceKey = newKey
+            val saved = PrefsManager.loadReferenceVolumes(this, currentDeviceKey)
+            referenceVolumes = if (saved.isEmpty()) {
+                captureReferenceVolumes()
+                referenceVolumes
+            } else {
+                saved.toMutableMap()
+            }
+            // Cancel any pending enforcement so newly loaded values take effect cleanly
+            handler.removeCallbacks(resetRunnable)
+        }
+
         val enabledStreams = PrefsManager.loadEnabledStreams(this)
         for ((stream, refVolume) in referenceVolumes) {
             // Skip streams that the user has disabled for enforcement
