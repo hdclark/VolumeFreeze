@@ -1,12 +1,19 @@
 package com.hdclark.volumefreeze
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
 import android.media.AudioManager
@@ -16,6 +23,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 /**
  * Foreground service that continuously monitors all accessible audio volume streams and
@@ -30,6 +38,11 @@ import androidx.core.app.NotificationCompat
  * intentionally delayed by [DUCKING_DELAY_MS] so that brief system-driven ducks (e.g.
  * for notification sounds) can complete before we restore the reference level.  The
  * polling loop still resets any lingering deviations within ~10 s.
+ *
+ * Bluetooth support: separate reference volumes are stored for the built-in phone speaker
+ * and for each A2DP Bluetooth audio device (identified by MAC address).  The service
+ * listens for A2DP connection-state changes and automatically switches to the appropriate
+ * reference set when a device connects or disconnects.
  */
 class VolumeMonitorService : Service() {
 
@@ -107,16 +120,22 @@ class VolumeMonitorService : Service() {
     private lateinit var audioManager: AudioManager
     private lateinit var notificationManager: NotificationManager
 
-    /** Volumes that should be enforced. */
+    /** Volumes that should be enforced (for the current audio output device). */
     private var referenceVolumes: MutableMap<Int, Int> = mutableMapOf()
 
     /** When true the service runs but does NOT modify any volumes. */
     private var isPaused: Boolean = false
 
+    /** Device key identifying the current audio output device. */
+    private var currentDeviceKey: String = PrefsManager.DEVICE_KEY_PHONE
+
     private val handler = Handler(Looper.getMainLooper())
 
     /** ContentObserver registered on Settings.System for immediate change detection. */
     private var volumeObserver: ContentObserver? = null
+
+    /** BroadcastReceiver for A2DP connection-state changes. */
+    private var btReceiver: BroadcastReceiver? = null
 
     // -------------------------------------------------------------------------
     // Service lifecycle
@@ -130,15 +149,17 @@ class VolumeMonitorService : Service() {
         createNotificationChannel()
         startForegroundCompat()
 
-        // Restore state from persistent storage
+        // Determine which audio device is active, then restore state
+        currentDeviceKey = getCurrentBtDeviceKey()
         isPaused = PrefsManager.loadPauseState(this)
-        val saved = PrefsManager.loadReferenceVolumes(this)
+        val saved = PrefsManager.loadReferenceVolumes(this, currentDeviceKey)
         if (saved.isEmpty()) {
             captureReferenceVolumes()
         } else {
             referenceVolumes = saved.toMutableMap()
         }
 
+        registerBluetoothReceiver()
         startMonitoring()
         updateNotification()
     }
@@ -154,6 +175,7 @@ class VolumeMonitorService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterBluetoothReceiver()
         stopMonitoring()
     }
 
@@ -254,6 +276,82 @@ class VolumeMonitorService : Service() {
     }
 
     // -------------------------------------------------------------------------
+    // Bluetooth A2DP tracking
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the MAC address of the first connected A2DP Bluetooth device, or
+     * [PrefsManager.DEVICE_KEY_PHONE] if none is connected (or permission is missing).
+     */
+    @SuppressLint("MissingPermission")
+    fun getCurrentBtDeviceKey(): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) return PrefsManager.DEVICE_KEY_PHONE
+        }
+        return try {
+            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+                ?: return PrefsManager.DEVICE_KEY_PHONE
+            btManager.getConnectedDevices(BluetoothProfile.A2DP)
+                .firstOrNull()?.address ?: PrefsManager.DEVICE_KEY_PHONE
+        } catch (_: Exception) {
+            PrefsManager.DEVICE_KEY_PHONE
+        }
+    }
+
+    private fun registerBluetoothReceiver() {
+        val filter = IntentFilter(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+        btReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
+                if (state == BluetoothProfile.STATE_CONNECTED ||
+                    state == BluetoothProfile.STATE_DISCONNECTED
+                ) {
+                    onBluetoothConnectionChanged()
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(btReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(btReceiver, filter)
+        }
+    }
+
+    private fun unregisterBluetoothReceiver() {
+        btReceiver?.let {
+            try { unregisterReceiver(it) } catch (_: Exception) {}
+        }
+        btReceiver = null
+    }
+
+    /**
+     * Called when an A2DP device connects or disconnects.
+     * Switches to the reference volumes for the newly active output device.
+     * If no volumes have been saved for the device yet, captures current volumes as the
+     * initial reference.
+     */
+    private fun onBluetoothConnectionChanged() {
+        // Small delay to allow the system to finalize the connection state
+        handler.postDelayed({
+            val newKey = getCurrentBtDeviceKey()
+            if (newKey == currentDeviceKey) return@postDelayed
+            currentDeviceKey = newKey
+            val saved = PrefsManager.loadReferenceVolumes(this, currentDeviceKey)
+            if (saved.isEmpty()) {
+                captureReferenceVolumes()
+            } else {
+                referenceVolumes = saved.toMutableMap()
+                // Cancel any pending enforcement so newly loaded values take effect cleanly
+                handler.removeCallbacks(resetRunnable)
+            }
+        }, 500L)
+    }
+
+    // -------------------------------------------------------------------------
     // Monitoring
     // -------------------------------------------------------------------------
 
@@ -308,8 +406,8 @@ class VolumeMonitorService : Service() {
 
     /**
      * Reads the current volume for every monitored stream and saves the values as
-     * the new reference.  Any enforcement in progress is cancelled so the captured
-     * values are treated as authoritative.
+     * the new reference for the current audio output device.  Any enforcement in
+     * progress is cancelled so the captured values are treated as authoritative.
      */
     fun captureReferenceVolumes() {
         val volumes = mutableMapOf<Int, Int>()
@@ -321,18 +419,21 @@ class VolumeMonitorService : Service() {
             }
         }
         referenceVolumes = volumes
-        PrefsManager.saveReferenceVolumes(this, volumes)
+        PrefsManager.saveReferenceVolumes(this, currentDeviceKey, volumes)
         // Cancel any pending reset so newly captured values are not immediately
         // overwritten by a stale enforcement callback.
         handler.removeCallbacks(resetRunnable)
     }
 
     /**
-     * For each stream that deviates from its reference value, reset it silently
-     * (no UI, no sound).
+     * For each stream that is enabled for enforcement and deviates from its reference
+     * value, reset it silently (no UI, no sound).
      */
     private fun enforceVolumes() {
+        val enabledStreams = PrefsManager.loadEnabledStreams(this)
         for ((stream, refVolume) in referenceVolumes) {
+            // Skip streams that the user has disabled for enforcement
+            if (enabledStreams != null && stream !in enabledStreams) continue
             try {
                 val current = audioManager.getStreamVolume(stream)
                 if (current != refVolume) {
@@ -366,8 +467,7 @@ class VolumeMonitorService : Service() {
     }
 
     // -------------------------------------------------------------------------
-    // Public accessors (used by MainActivity via bound-service pattern or by
-    // reading SharedPreferences directly)
+    // Public accessors
     // -------------------------------------------------------------------------
 
     fun isPaused(): Boolean = isPaused

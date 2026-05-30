@@ -1,5 +1,8 @@
 package com.hdclark.volumefreeze
 
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothProfile
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
@@ -12,12 +15,14 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.content.res.ColorStateList
 import android.view.View
+import android.widget.CheckBox
 import android.widget.TableRow
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.hdclark.volumefreeze.databinding.ActivityMainBinding
 
 /**
@@ -27,7 +32,9 @@ import com.hdclark.volumefreeze.databinding.ActivityMainBinding
  *  - Start [VolumeMonitorService] when the app opens.
  *  - Detect whether battery optimizations are enabled and direct the user to disable them.
  *  - Show the current state of each volume stream vs. the saved reference values.
- *  - Allow the user to pause / resume enforcement and to save new reference volumes.
+ *  - Allow the user to pause / resume enforcement, save new reference volumes, and toggle
+ *    per-stream enforcement via checkboxes.
+ *  - Display the currently active audio output device (phone speaker or Bluetooth name).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -45,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val UI_REFRESH_INTERVAL_MS = 1_000L
         private const val REQUEST_NOTIFICATION_PERMISSION = 100
+        private const val REQUEST_BLUETOOTH_PERMISSION = 101
     }
 
     // -------------------------------------------------------------------------
@@ -56,10 +64,17 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        // Push content below the status bar so the title is not obscured by the bezel
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, windowInsets ->
+            val bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(v.paddingLeft, bars.top, v.paddingRight, bars.bottom)
+            WindowInsetsCompat.CONSUMED
+        }
+
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
 
         setupButtons()
-        requestNotificationPermissionIfNeeded()
+        requestPermissionsIfNeeded()
 
         // Ensure the service is running
         VolumeMonitorService.startService(this)
@@ -79,18 +94,33 @@ class MainActivity : AppCompatActivity() {
     // Permissions
     // -------------------------------------------------------------------------
 
-    private fun requestNotificationPermissionIfNeeded() {
+    private fun requestPermissionsIfNeeded() {
+        val needed = mutableListOf<String>()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     this, android.Manifest.permission.POST_NOTIFICATIONS
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                ActivityCompat.requestPermissions(
-                    this,
-                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
-                    REQUEST_NOTIFICATION_PERMISSION
-                )
+                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
             }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                needed.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        }
+
+        if (needed.isNotEmpty()) {
+            ActivityCompat.requestPermissions(
+                this,
+                needed.toTypedArray(),
+                REQUEST_NOTIFICATION_PERMISSION
+            )
         }
     }
 
@@ -149,12 +179,61 @@ class MainActivity : AppCompatActivity() {
     }
 
     // -------------------------------------------------------------------------
+    // Bluetooth helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns the MAC address of the first connected A2DP Bluetooth device, or
+     * [PrefsManager.DEVICE_KEY_PHONE] if none is connected.
+     */
+    @SuppressLint("MissingPermission")
+    private fun getCurrentBtDeviceKey(): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) return PrefsManager.DEVICE_KEY_PHONE
+        }
+        return try {
+            val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+                ?: return PrefsManager.DEVICE_KEY_PHONE
+            btManager.getConnectedDevices(BluetoothProfile.A2DP)
+                .firstOrNull()?.address ?: PrefsManager.DEVICE_KEY_PHONE
+        } catch (_: Exception) {
+            PrefsManager.DEVICE_KEY_PHONE
+        }
+    }
+
+    /**
+     * Returns the friendly name of the first connected A2DP Bluetooth device, or the
+     * "Phone Speaker" string if none is connected.
+     */
+    @SuppressLint("MissingPermission")
+    private fun getCurrentBtDeviceName(): String {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) return getString(R.string.label_phone_speaker)
+        }
+        return try {
+            val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+                ?: return getString(R.string.label_phone_speaker)
+            btManager.getConnectedDevices(BluetoothProfile.A2DP)
+                .firstOrNull()?.name ?: getString(R.string.label_phone_speaker)
+        } catch (_: Exception) {
+            getString(R.string.label_phone_speaker)
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // UI refresh
     // -------------------------------------------------------------------------
 
     private fun refreshUi() {
         val isPaused = PrefsManager.loadPauseState(this)
-        val referenceVolumes = PrefsManager.loadReferenceVolumes(this)
+        val deviceKey = getCurrentBtDeviceKey()
+        val referenceVolumes = PrefsManager.loadReferenceVolumes(this, deviceKey)
         val batteryOptimized = isBatteryOptimized()
 
         // Status chip — tint the pill background to keep rounded corners
@@ -181,6 +260,9 @@ class MainActivity : AppCompatActivity() {
             binding.cardBatteryWarning.visibility = View.GONE
         }
 
+        // Audio device label
+        binding.tvAudioDevice.text = getString(R.string.label_audio_device, getCurrentBtDeviceName())
+
         // Volume table
         buildVolumeTable(referenceVolumes)
     }
@@ -200,7 +282,8 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Dynamically populates the volume table with one row per monitored stream,
-     * showing the current volume alongside the saved reference value.
+     * showing the current volume alongside the saved reference value and a checkbox
+     * that toggles whether the stream is enforced.
      */
     private fun buildVolumeTable(referenceVolumes: Map<Int, Int>) {
         val table = binding.tableVolumes
@@ -210,6 +293,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         val streams = VolumeMonitorService.getMonitoredStreams()
+        val enabledStreams = PrefsManager.loadEnabledStreams(this)
+            ?: streams.toSet()   // null means all are enabled
+
         for (stream in streams) {
             val currentVolume = try {
                 audioManager.getStreamVolume(stream)
@@ -231,6 +317,22 @@ class MainActivity : AppCompatActivity() {
             row.addView(makeVolumeCell("$currentVolume / $maxVolume"))
             row.addView(makeVolumeCell(refVolume?.toString() ?: getString(R.string.label_not_set)))
 
+            // Enforce checkbox — set checked state before attaching listener to avoid spurious callbacks
+            val checkbox = CheckBox(this).apply {
+                isChecked = stream in enabledStreams
+                layoutParams = TableRow.LayoutParams(
+                    0, TableRow.LayoutParams.WRAP_CONTENT, 0.8f
+                ).apply { gravity = android.view.Gravity.CENTER }
+                // Attach listener after setting isChecked so it only fires on user interaction
+                setOnCheckedChangeListener { _, checked ->
+                    val current = PrefsManager.loadEnabledStreams(this@MainActivity)
+                        ?: VolumeMonitorService.getMonitoredStreams().toSet()
+                    val updated = if (checked) current + stream else current - stream
+                    PrefsManager.saveEnabledStreams(this@MainActivity, updated)
+                }
+            }
+            row.addView(checkbox)
+
             // Highlight row if the current volume deviates from reference
             if (refVolume != null && currentVolume != refVolume) {
                 row.setBackgroundColor(
@@ -242,3 +344,4 @@ class MainActivity : AppCompatActivity() {
         }
     }
 }
+
