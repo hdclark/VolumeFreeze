@@ -52,7 +52,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val UI_REFRESH_INTERVAL_MS = 1_000L
         private const val REQUEST_NOTIFICATION_PERMISSION = 100
-        private const val REQUEST_BLUETOOTH_PERMISSION = 101
     }
 
     // -------------------------------------------------------------------------
