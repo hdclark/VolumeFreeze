@@ -16,7 +16,7 @@ data class AudioOutputProfile(
  *
  * Reference volumes are stored per audio-output device:
  *  - Key [DEVICE_KEY_PHONE] for the built-in phone speaker / wired output.
- *  - The Bluetooth device MAC address for every paired A2DP device.
+ *  - The Bluetooth device address when available, or a routed-device fallback key on API 24–27.
  *
  * Enabled-streams: the set of [AudioManager] stream types that should be actively enforced.
  * A null/absent value means all monitored streams are enabled (default).

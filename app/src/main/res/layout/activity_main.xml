@@ -143,6 +143,21 @@
             android:layout_marginBottom="12dp" />
 
         <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/reference_profile_picker_label"
+            android:textAppearance="?attr/textAppearanceLabelMedium"
+            android:textStyle="bold"
+            android:layout_marginBottom="4dp" />
+
+        <Spinner
+            android:id="@+id/spinner_reference_profile"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp" />
+
+
+        <TextView
             android:id="@+id/tv_known_outputs_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

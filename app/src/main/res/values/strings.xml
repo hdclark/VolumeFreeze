@@ -32,6 +32,8 @@
     <string name="label_unknown_bluetooth_device">Bluetooth Device</string>
     <string name="section_known_outputs">Known Reference Profiles</string>
     <string name="known_output_saved">%1$s: %2$d saved streams</string>
+    <string name="reference_profile_picker_label">Set reference values for</string>
+    <string name="reference_profile_active">%1$s (active)</string>
 
     <!-- Notification -->
     <string name="notification_channel_name">Volume Freeze Service</string>

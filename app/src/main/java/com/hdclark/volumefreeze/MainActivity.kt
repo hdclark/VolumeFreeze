@@ -1,12 +1,7 @@
 package com.hdclark.volumefreeze
 
-import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothProfile
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -17,6 +12,8 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.content.res.ColorStateList
 import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.AdapterView
 import android.widget.CheckBox
 import android.widget.TableRow
 import android.widget.TextView
@@ -42,6 +39,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var audioManager: AudioManager
+    private var selectedProfileKey: String = PrefsManager.DEVICE_KEY_PHONE
+    private var lastActiveProfileKey: String? = null
+    private var isUpdatingProfileSpinner = false
 
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val refreshRunnable = object : Runnable {
@@ -141,7 +141,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnUpdateReference.setOnClickListener {
-            sendServiceAction(VolumeMonitorService.ACTION_UPDATE_REFERENCE)
+            sendServiceAction(VolumeMonitorService.ACTION_UPDATE_REFERENCE, selectedProfileKey)
         }
 
         binding.btnBatteryOptimization.setOnClickListener {
@@ -149,9 +149,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendServiceAction(action: String) {
+    private fun sendServiceAction(action: String, deviceKey: String? = null) {
         val intent = Intent(this, VolumeMonitorService::class.java).apply {
             this.action = action
+            deviceKey?.let { putExtra(VolumeMonitorService.EXTRA_DEVICE_KEY, it) }
         }
         startService(intent)
         // Refresh after a short delay to let the service process the action
@@ -183,65 +184,34 @@ class MainActivity : AppCompatActivity() {
     // Bluetooth helpers
     // -------------------------------------------------------------------------
 
-    /**
-     * Returns the MAC address of the first connected A2DP Bluetooth device, or
-     * [PrefsManager.DEVICE_KEY_PHONE] if none is connected.
-     */
-    @SuppressLint("MissingPermission")
-    private fun getCurrentBtDeviceKey(): String {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(
-                    this, android.Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return PrefsManager.DEVICE_KEY_PHONE
-        }
-        return try {
-            getCurrentBluetoothDevice()?.address ?: PrefsManager.DEVICE_KEY_PHONE
-        } catch (_: Exception) {
-            PrefsManager.DEVICE_KEY_PHONE
-        }
-    }
-
-    /**
-     * Returns the friendly name of the first connected A2DP Bluetooth device, or the
-     * "Phone Speaker" string if none is connected.
-     */
-    @SuppressLint("MissingPermission")
-    private fun getCurrentBtDeviceName(): String {
-        val device = getCurrentBluetoothDevice() ?: return getString(R.string.label_phone_speaker)
-        PrefsManager.rememberOutputDevice(
-            this,
-            device.address,
-            device.name ?: getString(R.string.label_unknown_bluetooth_device),
-            true
-        )
-        return device.name ?: getString(R.string.label_unknown_bluetooth_device)
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun getCurrentBluetoothDevice(): BluetoothDevice? {
-        if (!isBluetoothAudioActive()) return null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(
-                    this, android.Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return null
-        }
-        return try {
-            val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager ?: return null
-            btManager.getConnectedDevices(BluetoothProfile.A2DP).firstOrNull()
+    private fun getCurrentOutputProfile(): AudioOutputProfile {
+        val bluetoothProfile = try {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull { it.bluetoothOutputProfileKey() != null }
+                ?.let { device ->
+                    val profileKey = device.bluetoothOutputProfileKey() ?: return@let null
+                    AudioOutputProfile(
+                        key = profileKey,
+                        name = device.bluetoothOutputProfileName(
+                            getString(R.string.label_unknown_bluetooth_device)
+                        ),
+                        isBluetooth = true
+                    )
+                }
         } catch (_: Exception) {
             null
         }
-    }
 
-    private fun isBluetoothAudioActive(): Boolean = try {
-        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
-            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        bluetoothProfile?.let {
+            PrefsManager.rememberOutputDevice(this, it.key, it.name, true)
+            return it
         }
-    } catch (_: Exception) {
-        audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn
+
+        return AudioOutputProfile(
+            PrefsManager.DEVICE_KEY_PHONE,
+            getString(R.string.label_phone_speaker),
+            false
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -250,8 +220,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshUi() {
         val isPaused = PrefsManager.loadPauseState(this)
-        val deviceKey = getCurrentBtDeviceKey()
-        val referenceVolumes = PrefsManager.loadReferenceVolumes(this, deviceKey)
+        val activeProfile = getCurrentOutputProfile()
+        val deviceKey = activeProfile.key
+        if (lastActiveProfileKey != deviceKey) {
+            selectedProfileKey = deviceKey
+            lastActiveProfileKey = deviceKey
+        }
+        val referenceVolumes = PrefsManager.loadReferenceVolumes(this, selectedProfileKey)
         val batteryOptimized = isBatteryOptimized()
 
         // Status chip — tint the pill background to keep rounded corners
@@ -279,10 +254,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Audio device label
-        binding.tvAudioDevice.text = getString(R.string.label_audio_device, getCurrentBtDeviceName())
+        binding.tvAudioDevice.text = getString(R.string.label_audio_device, activeProfile.name)
 
         // Known output profiles
         buildKnownOutputs(deviceKey)
+        buildProfileSelector(deviceKey)
 
         // Volume table
         buildVolumeTable(referenceVolumes)
@@ -300,6 +276,48 @@ class MainActivity : AppCompatActivity() {
             val prefix = if (output.key == activeDeviceKey) "• " else "  "
             prefix + getString(R.string.known_output_saved, output.name, savedStreams)
         }
+    }
+
+    private fun buildProfileSelector(activeDeviceKey: String) {
+        val profiles = getAllOutputProfiles()
+        val labels = profiles.map { profile ->
+            if (profile.key == activeDeviceKey) {
+                getString(R.string.reference_profile_active, profile.name)
+            } else {
+                profile.name
+            }
+        }
+        val selectedIndex = profiles.indexOfFirst { it.key == selectedProfileKey }.coerceAtLeast(0)
+
+        isUpdatingProfileSpinner = true
+        binding.spinnerReferenceProfile.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            labels
+        ).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        binding.spinnerReferenceProfile.setSelection(selectedIndex, false)
+        isUpdatingProfileSpinner = false
+
+        binding.spinnerReferenceProfile.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                if (isUpdatingProfileSpinner) return
+                selectedProfileKey = profiles.getOrNull(position)?.key ?: PrefsManager.DEVICE_KEY_PHONE
+                buildVolumeTable(PrefsManager.loadReferenceVolumes(this@MainActivity, selectedProfileKey))
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
+    }
+
+    private fun getAllOutputProfiles(): List<AudioOutputProfile> {
+        val phone = AudioOutputProfile(
+            PrefsManager.DEVICE_KEY_PHONE,
+            getString(R.string.label_phone_speaker),
+            false
+        )
+        return (listOf(phone) + PrefsManager.loadKnownOutputDevices(this)).distinctBy { it.key }
     }
 
     /**
