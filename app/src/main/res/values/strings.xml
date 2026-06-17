@@ -10,6 +10,7 @@
     <string name="action_pause">Pause Enforcement</string>
     <string name="action_resume">Resume Enforcement</string>
     <string name="action_update_reference">Save Current as Reference</string>
+    <string name="action_update_reference_short">Set Reference</string>
 
     <!-- Battery optimization warning -->
     <string name="battery_warning_title">⚠ Battery Optimization Enabled</string>
@@ -28,6 +29,9 @@
     <!-- Bluetooth device labels -->
     <string name="label_phone_speaker">Phone Speaker</string>
     <string name="label_audio_device">Reference profile: %1$s</string>
+    <string name="label_unknown_bluetooth_device">Bluetooth Device</string>
+    <string name="section_known_outputs">Known Reference Profiles</string>
+    <string name="known_output_saved">%1$s: %2$d saved streams</string>
 
     <!-- Notification -->
     <string name="notification_channel_name">Volume Freeze Service</string>

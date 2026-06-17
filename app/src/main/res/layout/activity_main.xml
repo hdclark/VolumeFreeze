@@ -142,6 +142,24 @@
             android:textColor="?attr/colorOnSurfaceVariant"
             android:layout_marginBottom="12dp" />
 
+        <TextView
+            android:id="@+id/tv_known_outputs_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/section_known_outputs"
+            android:textAppearance="?attr/textAppearanceTitleSmall"
+            android:textStyle="bold"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tv_known_outputs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="12dp" />
+
         <!-- Volume table -->
         <TableLayout
             android:id="@+id/table_volumes"

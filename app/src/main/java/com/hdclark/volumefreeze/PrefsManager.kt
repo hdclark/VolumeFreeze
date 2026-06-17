@@ -5,6 +5,12 @@ import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 
+data class AudioOutputProfile(
+    val key: String,
+    val name: String,
+    val isBluetooth: Boolean,
+)
+
 /**
  * Manages persistent storage of reference volumes and app state using SharedPreferences.
  *
@@ -27,6 +33,7 @@ object PrefsManager {
 
     private const val KEY_IS_PAUSED = "is_paused"
     private const val KEY_ENABLED_STREAMS = "enabled_streams"
+    private const val KEY_KNOWN_OUTPUTS = "known_outputs"
 
     /** SharedPreferences key used for the built-in phone speaker / wired output. */
     const val DEVICE_KEY_PHONE = "phone_speaker"
@@ -69,6 +76,45 @@ object PrefsManager {
         } catch (_: Exception) {
             emptyMap()
         }
+
+    fun rememberOutputDevice(context: Context, key: String, name: String, isBluetooth: Boolean) {
+        if (key == DEVICE_KEY_PHONE) return
+        val outputs = loadKnownOutputDevices(context).toMutableMap()
+        outputs[key] = AudioOutputProfile(key, name, isBluetooth)
+        saveKnownOutputDevices(context, outputs.values)
+    }
+
+    fun loadKnownOutputDevices(context: Context): List<AudioOutputProfile> {
+        val jsonString = prefs(context).getString(KEY_KNOWN_OUTPUTS, null) ?: return emptyList()
+        return try {
+            val json = JSONArray(jsonString)
+            buildList {
+                for (i in 0 until json.length()) {
+                    val item = json.getJSONObject(i)
+                    val key = item.optString("key")
+                    val name = item.optString("name")
+                    if (key.isNotBlank() && name.isNotBlank()) {
+                        add(AudioOutputProfile(key, name, item.optBoolean("bluetooth", true)))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveKnownOutputDevices(context: Context, outputs: Collection<AudioOutputProfile>) {
+        val json = JSONArray()
+        outputs.sortedWith(compareBy<AudioOutputProfile> { !it.isBluetooth }.thenBy { it.name.lowercase() })
+            .forEach { output ->
+                json.put(JSONObject().apply {
+                    put("key", output.key)
+                    put("name", output.name)
+                    put("bluetooth", output.isBluetooth)
+                })
+            }
+        prefs(context).edit().putString(KEY_KNOWN_OUTPUTS, json.toString()).apply()
+    }
 
     // -------------------------------------------------------------------------
     // Enabled streams
