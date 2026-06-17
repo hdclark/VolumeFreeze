@@ -8,15 +8,14 @@ import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
@@ -25,7 +24,6 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
-import androidx.core.content.ContextCompat
 
 /**
  * Foreground service that continuously monitors all accessible audio volume streams and
@@ -70,6 +68,7 @@ class VolumeMonitorService : Service() {
         const val ACTION_PAUSE = "com.hdclark.volumefreeze.ACTION_PAUSE"
         const val ACTION_RESUME = "com.hdclark.volumefreeze.ACTION_RESUME"
         const val ACTION_UPDATE_REFERENCE = "com.hdclark.volumefreeze.ACTION_UPDATE_REFERENCE"
+        const val EXTRA_DEVICE_KEY = "com.hdclark.volumefreeze.EXTRA_DEVICE_KEY"
 
         /** All volume streams we attempt to monitor.  STREAM_ACCESSIBILITY guarded to API 26+. */
         fun getMonitoredStreams(): List<Int> = buildList {
@@ -136,8 +135,11 @@ class VolumeMonitorService : Service() {
     /** ContentObserver registered on Settings.System for immediate change detection. */
     private var volumeObserver: ContentObserver? = null
 
-    /** BroadcastReceiver for A2DP connection-state changes. */
+    /** BroadcastReceiver for Bluetooth connection-state changes. */
     private var btReceiver: BroadcastReceiver? = null
+
+    /** Audio device callback catches route changes even when Bluetooth profile broadcasts lag. */
+    private var audioDeviceCallback: AudioDeviceCallback? = null
 
     // -------------------------------------------------------------------------
     // Service lifecycle
@@ -162,6 +164,7 @@ class VolumeMonitorService : Service() {
         }
 
         registerBluetoothReceiver()
+        registerAudioDeviceCallback()
         startMonitoring()
         updateNotification()
     }
@@ -170,7 +173,7 @@ class VolumeMonitorService : Service() {
         when (intent?.action) {
             ACTION_PAUSE           -> handlePause()
             ACTION_RESUME          -> handleResume()
-            ACTION_UPDATE_REFERENCE -> captureReferenceVolumes()
+            ACTION_UPDATE_REFERENCE -> captureReferenceVolumes(intent.getStringExtra(EXTRA_DEVICE_KEY))
         }
         return START_STICKY
     }
@@ -178,6 +181,7 @@ class VolumeMonitorService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterBluetoothReceiver()
+        unregisterAudioDeviceCallback()
         stopMonitoring()
     }
 
@@ -291,52 +295,50 @@ class VolumeMonitorService : Service() {
      * [PrefsManager.DEVICE_KEY_PHONE] if none is connected (or permission is missing).
      */
     @SuppressLint("MissingPermission")
-    fun getCurrentOutputDeviceKey(): String {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (ContextCompat.checkSelfPermission(
-                    this, android.Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) return PrefsManager.DEVICE_KEY_PHONE
-        }
-        return getCurrentBluetoothDevice()?.address ?: PrefsManager.DEVICE_KEY_PHONE
-    }
+    fun getCurrentOutputDeviceKey(): String = getCurrentBluetoothOutputProfile()?.key
+        ?: PrefsManager.DEVICE_KEY_PHONE
 
-    @SuppressLint("MissingPermission")
-    private fun getCurrentBluetoothDevice(): BluetoothDevice? {
-        if (!isBluetoothAudioActive()) return null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
-        ) return null
-        return try {
-            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return null
-            btManager.getConnectedDevices(BluetoothProfile.A2DP).firstOrNull()
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun isBluetoothAudioActive(): Boolean = try {
-        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
-            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-        }
+    /**
+     * Prefer the routed output devices reported by AudioManager over A2DP profile
+     * connection state. Some devices are connected but not the active media route,
+     * and profile broadcasts can arrive before routing has completed.
+     */
+    private fun getCurrentBluetoothOutputProfile(): AudioOutputProfile? = try {
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .firstOrNull { it.isBluetoothOutput() && it.address.isNotBlank() }
+            ?.let { device ->
+                AudioOutputProfile(
+                    key = device.address,
+                    name = device.productName?.toString()?.takeIf { it.isNotBlank() }
+                        ?: getString(R.string.label_unknown_bluetooth_device),
+                    isBluetooth = true
+                )
+            }
     } catch (_: Exception) {
-        audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn
+        null
     }
+
+    private fun AudioDeviceInfo.isBluetoothOutput(): Boolean =
+        type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
 
     @SuppressLint("MissingPermission")
     private fun rememberCurrentOutputDevice() {
-        getCurrentBluetoothDevice()?.let { device ->
-            PrefsManager.rememberOutputDevice(this, device.address, device.name ?: getString(R.string.label_unknown_bluetooth_device), true)
+        getCurrentBluetoothOutputProfile()?.let { profile ->
+            PrefsManager.rememberOutputDevice(this, profile.key, profile.name, true)
         }
     }
 
     private fun registerBluetoothReceiver() {
-        val filter = IntentFilter(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+        val filter = IntentFilter().apply {
+            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+        }
         btReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
-                if (state == BluetoothProfile.STATE_CONNECTED ||
+                if (intent.action != BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED ||
+                    state == BluetoothProfile.STATE_CONNECTED ||
                     state == BluetoothProfile.STATE_DISCONNECTED
                 ) {
                     onBluetoothConnectionChanged()
@@ -358,6 +360,25 @@ class VolumeMonitorService : Service() {
             try { unregisterReceiver(it) } catch (_: Exception) {}
         }
         btReceiver = null
+    }
+
+
+    private fun registerAudioDeviceCallback() {
+        audioDeviceCallback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                if (addedDevices.any { it.isBluetoothOutput() }) onBluetoothConnectionChanged()
+            }
+
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                if (removedDevices.any { it.isBluetoothOutput() }) onBluetoothConnectionChanged()
+            }
+        }
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)
+    }
+
+    private fun unregisterAudioDeviceCallback() {
+        audioDeviceCallback?.let { audioManager.unregisterAudioDeviceCallback(it) }
+        audioDeviceCallback = null
     }
 
     /**
@@ -442,9 +463,11 @@ class VolumeMonitorService : Service() {
      * the new reference for the current audio output device.  Any enforcement in
      * progress is cancelled so the captured values are treated as authoritative.
      */
-    fun captureReferenceVolumes() {
-        currentDeviceKey = getCurrentOutputDeviceKey()
+    fun captureReferenceVolumes(deviceKeyOverride: String? = null) {
+        val activeDeviceKey = getCurrentOutputDeviceKey()
+        currentDeviceKey = activeDeviceKey
         rememberCurrentOutputDevice()
+        val saveDeviceKey = deviceKeyOverride ?: activeDeviceKey
         val volumes = mutableMapOf<Int, Int>()
         for (stream in getMonitoredStreams()) {
             try {
@@ -453,8 +476,10 @@ class VolumeMonitorService : Service() {
                 // Stream not available on this device / API level — skip it.
             }
         }
-        referenceVolumes = volumes
-        PrefsManager.saveReferenceVolumes(this, currentDeviceKey, volumes)
+        if (saveDeviceKey == activeDeviceKey) {
+            referenceVolumes = volumes
+        }
+        PrefsManager.saveReferenceVolumes(this, saveDeviceKey, volumes)
         updateNotification()
         // Cancel any pending reset so newly captured values are not immediately
         // overwritten by a stale enforcement callback.
