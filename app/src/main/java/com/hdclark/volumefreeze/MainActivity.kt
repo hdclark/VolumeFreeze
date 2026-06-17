@@ -1,10 +1,12 @@
 package com.hdclark.volumefreeze
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -194,10 +196,7 @@ class MainActivity : AppCompatActivity() {
             ) return PrefsManager.DEVICE_KEY_PHONE
         }
         return try {
-            val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
-                ?: return PrefsManager.DEVICE_KEY_PHONE
-            btManager.getConnectedDevices(BluetoothProfile.A2DP)
-                .firstOrNull()?.address ?: PrefsManager.DEVICE_KEY_PHONE
+            getCurrentBluetoothDevice()?.address ?: PrefsManager.DEVICE_KEY_PHONE
         } catch (_: Exception) {
             PrefsManager.DEVICE_KEY_PHONE
         }
@@ -209,20 +208,40 @@ class MainActivity : AppCompatActivity() {
      */
     @SuppressLint("MissingPermission")
     private fun getCurrentBtDeviceName(): String {
+        val device = getCurrentBluetoothDevice() ?: return getString(R.string.label_phone_speaker)
+        PrefsManager.rememberOutputDevice(
+            this,
+            device.address,
+            device.name ?: getString(R.string.label_unknown_bluetooth_device),
+            true
+        )
+        return device.name ?: getString(R.string.label_unknown_bluetooth_device)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun getCurrentBluetoothDevice(): BluetoothDevice? {
+        if (!isBluetoothAudioActive()) return null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(
                     this, android.Manifest.permission.BLUETOOTH_CONNECT
                 ) != PackageManager.PERMISSION_GRANTED
-            ) return getString(R.string.label_phone_speaker)
+            ) return null
         }
         return try {
-            val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
-                ?: return getString(R.string.label_phone_speaker)
-            btManager.getConnectedDevices(BluetoothProfile.A2DP)
-                .firstOrNull()?.name ?: getString(R.string.label_phone_speaker)
+            val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager ?: return null
+            btManager.getConnectedDevices(BluetoothProfile.A2DP).firstOrNull()
         } catch (_: Exception) {
-            getString(R.string.label_phone_speaker)
+            null
         }
+    }
+
+    private fun isBluetoothAudioActive(): Boolean = try {
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        }
+    } catch (_: Exception) {
+        audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn
     }
 
     // -------------------------------------------------------------------------
@@ -262,8 +281,25 @@ class MainActivity : AppCompatActivity() {
         // Audio device label
         binding.tvAudioDevice.text = getString(R.string.label_audio_device, getCurrentBtDeviceName())
 
+        // Known output profiles
+        buildKnownOutputs(deviceKey)
+
         // Volume table
         buildVolumeTable(referenceVolumes)
+    }
+
+    private fun buildKnownOutputs(activeDeviceKey: String) {
+        val phone = AudioOutputProfile(
+            PrefsManager.DEVICE_KEY_PHONE,
+            getString(R.string.label_phone_speaker),
+            false
+        )
+        val outputs = listOf(phone) + PrefsManager.loadKnownOutputDevices(this)
+        binding.tvKnownOutputs.text = outputs.distinctBy { it.key }.joinToString("\n") { output ->
+            val savedStreams = PrefsManager.loadReferenceVolumes(this, output.key).size
+            val prefix = if (output.key == activeDeviceKey) "• " else "  "
+            prefix + getString(R.string.known_output_saved, output.name, savedStreams)
+        }
     }
 
     /**

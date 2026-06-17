@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
@@ -16,6 +17,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
@@ -150,7 +152,7 @@ class VolumeMonitorService : Service() {
         startForegroundCompat()
 
         // Determine which audio device is active, then restore state
-        currentDeviceKey = getCurrentBtDeviceKey()
+        currentDeviceKey = getCurrentOutputDeviceKey()
         isPaused = PrefsManager.loadPauseState(this)
         val saved = PrefsManager.loadReferenceVolumes(this, currentDeviceKey)
         if (saved.isEmpty()) {
@@ -253,6 +255,11 @@ class VolumeMonitorService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(toggleIcon, toggleLabel, toggleIntent)
+            .addAction(
+                R.drawable.ic_notification,
+                getString(R.string.action_update_reference_short),
+                createServiceActionPendingIntent(3, ACTION_UPDATE_REFERENCE)
+            )
             .build()
     }
 
@@ -284,20 +291,43 @@ class VolumeMonitorService : Service() {
      * [PrefsManager.DEVICE_KEY_PHONE] if none is connected (or permission is missing).
      */
     @SuppressLint("MissingPermission")
-    fun getCurrentBtDeviceKey(): String {
+    fun getCurrentOutputDeviceKey(): String {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (ContextCompat.checkSelfPermission(
                     this, android.Manifest.permission.BLUETOOTH_CONNECT
                 ) != PackageManager.PERMISSION_GRANTED
             ) return PrefsManager.DEVICE_KEY_PHONE
         }
+        return getCurrentBluetoothDevice()?.address ?: PrefsManager.DEVICE_KEY_PHONE
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun getCurrentBluetoothDevice(): BluetoothDevice? {
+        if (!isBluetoothAudioActive()) return null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+        ) return null
         return try {
-            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-                ?: return PrefsManager.DEVICE_KEY_PHONE
-            btManager.getConnectedDevices(BluetoothProfile.A2DP)
-                .firstOrNull()?.address ?: PrefsManager.DEVICE_KEY_PHONE
+            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager ?: return null
+            btManager.getConnectedDevices(BluetoothProfile.A2DP).firstOrNull()
         } catch (_: Exception) {
-            PrefsManager.DEVICE_KEY_PHONE
+            null
+        }
+    }
+
+    private fun isBluetoothAudioActive(): Boolean = try {
+        audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        }
+    } catch (_: Exception) {
+        audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun rememberCurrentOutputDevice() {
+        getCurrentBluetoothDevice()?.let { device ->
+            PrefsManager.rememberOutputDevice(this, device.address, device.name ?: getString(R.string.label_unknown_bluetooth_device), true)
         }
     }
 
@@ -339,7 +369,8 @@ class VolumeMonitorService : Service() {
     private fun onBluetoothConnectionChanged() {
         // Small delay to allow the system to finalize the connection state
         handler.postDelayed({
-            val newKey = getCurrentBtDeviceKey()
+            val newKey = getCurrentOutputDeviceKey()
+            rememberCurrentOutputDevice()
             if (newKey == currentDeviceKey) return@postDelayed
             currentDeviceKey = newKey
             val saved = PrefsManager.loadReferenceVolumes(this, currentDeviceKey)
@@ -412,6 +443,8 @@ class VolumeMonitorService : Service() {
      * progress is cancelled so the captured values are treated as authoritative.
      */
     fun captureReferenceVolumes() {
+        currentDeviceKey = getCurrentOutputDeviceKey()
+        rememberCurrentOutputDevice()
         val volumes = mutableMapOf<Int, Int>()
         for (stream in getMonitoredStreams()) {
             try {
@@ -422,6 +455,7 @@ class VolumeMonitorService : Service() {
         }
         referenceVolumes = volumes
         PrefsManager.saveReferenceVolumes(this, currentDeviceKey, volumes)
+        updateNotification()
         // Cancel any pending reset so newly captured values are not immediately
         // overwritten by a stale enforcement callback.
         handler.removeCallbacks(resetRunnable)
@@ -431,10 +465,11 @@ class VolumeMonitorService : Service() {
      * For each stream that is enabled for enforcement and deviates from its reference
      * value, reset it silently (no UI, no sound).
      */
-private fun enforceVolumes() {
-        val newKey = getCurrentBtDeviceKey()
+    private fun enforceVolumes() {
+        val newKey = getCurrentOutputDeviceKey()
         if (newKey != currentDeviceKey) {
             currentDeviceKey = newKey
+            rememberCurrentOutputDevice()
             val saved = PrefsManager.loadReferenceVolumes(this, currentDeviceKey)
             referenceVolumes = if (saved.isEmpty()) {
                 captureReferenceVolumes()
