@@ -79,7 +79,7 @@ object PrefsManager {
 
     fun rememberOutputDevice(context: Context, key: String, name: String, isBluetooth: Boolean) {
         if (key == DEVICE_KEY_PHONE) return
-        val outputs = loadKnownOutputDevices(context).toMutableMap()
+        val outputs = loadKnownOutputDevices(context).associateBy { it.key }.toMutableMap()
         outputs[key] = AudioOutputProfile(key, name, isBluetooth)
         saveKnownOutputDevices(context, outputs.values)
     }
