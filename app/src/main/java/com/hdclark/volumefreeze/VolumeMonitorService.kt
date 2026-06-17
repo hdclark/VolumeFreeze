@@ -40,7 +40,8 @@ import androidx.core.app.NotificationCompat
  * polling loop still resets any lingering deviations within ~10 s.
  *
  * Bluetooth support: separate reference volumes are stored for the built-in phone speaker
- * and for each A2DP Bluetooth audio device (identified by MAC address).  The service
+ * and for each A2DP Bluetooth audio device (identified by address when available, or a routed-device fallback key
+ * on API 24–27).  The service
  * listens for A2DP connection-state changes and automatically switches to the appropriate
  * reference set when a device connects or disconnects.
  */
@@ -291,7 +292,7 @@ class VolumeMonitorService : Service() {
     // -------------------------------------------------------------------------
 
     /**
-     * Returns the MAC address of the first connected A2DP Bluetooth device, or
+     * Returns the profile key of the first routed Bluetooth output device, or
      * [PrefsManager.DEVICE_KEY_PHONE] if none is connected (or permission is missing).
      */
     @SuppressLint("MissingPermission")
@@ -305,21 +306,20 @@ class VolumeMonitorService : Service() {
      */
     private fun getCurrentBluetoothOutputProfile(): AudioOutputProfile? = try {
         audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .firstOrNull { it.isBluetoothOutput() && it.address.isNotBlank() }
+            .firstOrNull { it.bluetoothOutputProfileKey() != null }
             ?.let { device ->
+                val profileKey = device.bluetoothOutputProfileKey() ?: return@let null
                 AudioOutputProfile(
-                    key = device.address,
-                    name = device.productName?.toString()?.takeIf { it.isNotBlank() }
-                        ?: getString(R.string.label_unknown_bluetooth_device),
+                    key = profileKey,
+                    name = device.bluetoothOutputProfileName(
+                        getString(R.string.label_unknown_bluetooth_device)
+                    ),
                     isBluetooth = true
                 )
             }
     } catch (_: Exception) {
         null
     }
-
-    private fun AudioDeviceInfo.isBluetoothOutput(): Boolean =
-        type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
 
     @SuppressLint("MissingPermission")
     private fun rememberCurrentOutputDevice() {
@@ -366,11 +366,11 @@ class VolumeMonitorService : Service() {
     private fun registerAudioDeviceCallback() {
         audioDeviceCallback = object : AudioDeviceCallback() {
             override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-                if (addedDevices.any { it.isBluetoothOutput() }) onBluetoothConnectionChanged()
+                if (addedDevices.any { it.isBluetoothOutputDevice() }) onBluetoothConnectionChanged()
             }
 
             override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                if (removedDevices.any { it.isBluetoothOutput() }) onBluetoothConnectionChanged()
+                if (removedDevices.any { it.isBluetoothOutputDevice() }) onBluetoothConnectionChanged()
             }
         }
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)

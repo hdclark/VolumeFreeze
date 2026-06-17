@@ -2,7 +2,6 @@ package com.hdclark.volumefreeze
 
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
@@ -188,12 +187,14 @@ class MainActivity : AppCompatActivity() {
     private fun getCurrentOutputProfile(): AudioOutputProfile {
         val bluetoothProfile = try {
             audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-                .firstOrNull { it.isBluetoothOutput() && it.address.isNotBlank() }
+                .firstOrNull { it.bluetoothOutputProfileKey() != null }
                 ?.let { device ->
+                    val profileKey = device.bluetoothOutputProfileKey() ?: return@let null
                     AudioOutputProfile(
-                        key = device.address,
-                        name = device.productName?.toString()?.takeIf { it.isNotBlank() }
-                            ?: getString(R.string.label_unknown_bluetooth_device),
+                        key = profileKey,
+                        name = device.bluetoothOutputProfileName(
+                            getString(R.string.label_unknown_bluetooth_device)
+                        ),
                         isBluetooth = true
                     )
                 }
@@ -212,9 +213,6 @@ class MainActivity : AppCompatActivity() {
             false
         )
     }
-
-    private fun AudioDeviceInfo.isBluetoothOutput(): Boolean =
-        type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
 
     // -------------------------------------------------------------------------
     // UI refresh
